@@ -1,5 +1,6 @@
 export const config = { runtime: "nodejs" };
 
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import {
   getHwid,
@@ -8,9 +9,12 @@ import {
   isTokenUsed,
   markTokenUsed,
   deleteUsedToken,
+  validateAndConsumeNonce,
 } from "../../lib/session-store.js";
+import { checkRateLimit } from "../../lib/rate-limiter.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
 const LOOTLINK_BASE_URL = "https://lootlinkcom.vercel.app";
 const HEARTBEAT_WINDOW_MS = 20000;
 
@@ -79,7 +83,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key"
+    "Content-Type, Authorization, X-VW-API-Key, X-Client-Token, X-Attestation"
   );
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
@@ -90,6 +94,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     console.log("[BYPASS] Method not allowed");
     return res.status(405).json({ status: "error", message: "Method not allowed" });
+  }
+
+  const clientToken = (req.headers["x-client-token"] || "").trim();
+  if (!clientToken) {
+    console.log("[BYPASS] Missing X-Client-Token");
+    return res.status(400).json({ status: "error", message: "Missing X-Client-Token" });
   }
 
   if (!JWT_SECRET) {
@@ -123,6 +133,12 @@ export default async function handler(req, res) {
     return res.status(401).json({ status: "error", message: "Invalid API key" });
   }
 
+  const rateLimit = await checkRateLimit(apiKey, "bypass", 5, 60);
+  if (!rateLimit.allowed) {
+    console.log("[BYPASS] Rate limited");
+    return res.status(429).json({ status: "error", message: "Too many requests" });
+  }
+
   const storedHwid = await getHwid(apiKey);
   if (!storedHwid) {
     console.log("[BYPASS] HWID not registered");
@@ -153,6 +169,36 @@ export default async function handler(req, res) {
       status: "error",
       message: "Heartbeat expired, please heartbeat again",
     });
+  }
+
+  const attestationHeader = (req.headers["x-attestation"] || "").trim();
+  if (!attestationHeader) {
+    console.log("[BYPASS] Missing attestation");
+    return res.status(400).json({ status: "error", message: "Missing attestation" });
+  }
+
+  const parts = attestationHeader.split(".");
+  if (parts.length !== 2) {
+    console.log("[BYPASS] Invalid attestation format");
+    return res.status(400).json({ status: "error", message: "Invalid attestation" });
+  }
+  const attestationNonce = parts[0];
+  const attestationHmac = parts[1];
+
+  const nonceValid = await validateAndConsumeNonce(attestationNonce, apiKey);
+  if (!nonceValid) {
+    console.log("[BYPASS] Invalid or expired nonce");
+    return res.status(401).json({ status: "error", message: "Invalid or expired nonce" });
+  }
+
+  const expectedHmac = crypto
+    .createHmac("sha256", HWID_ENCRYPTION_KEY)
+    .update(attestationNonce)
+    .digest("hex");
+
+  if (attestationHmac !== expectedHmac) {
+    console.log("[BYPASS] Attestation HMAC mismatch");
+    return res.status(401).json({ status: "error", message: "Attestation failed" });
   }
 
   const body = parseBody(req);
