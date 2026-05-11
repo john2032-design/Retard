@@ -191,10 +191,19 @@ export default async function handler(req, res) {
     return res.status(401).json({ status: "error", message: "Invalid or expired nonce" });
   }
 
-  const publicKeyPem = await getPublicKey(apiKey);
-  if (!publicKeyPem) {
+  const publicKeyBase64 = await getPublicKey(apiKey);
+  if (!publicKeyBase64) {
     console.log("[BYPASS] Public key not found");
     return res.status(400).json({ status: "error", message: "Public key not registered" });
+  }
+
+  let publicKey;
+  try {
+    const derBuffer = Buffer.from(publicKeyBase64, "base64");
+    publicKey = crypto.createPublicKey({ key: derBuffer, format: "der", type: "spki" });
+  } catch {
+    console.log("[BYPASS] Failed to parse public key");
+    return res.status(400).json({ status: "error", message: "Invalid public key" });
   }
 
   let verified;
@@ -203,8 +212,9 @@ export default async function handler(req, res) {
       "sha256",
       Buffer.from(attestationNonce),
       {
-        key: publicKeyPem,
+        key: publicKey,
         padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+        saltLength: 32,
       },
       Buffer.from(attestationSignature, "base64")
     );
