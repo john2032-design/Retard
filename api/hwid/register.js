@@ -2,6 +2,7 @@ export const config = { runtime: "nodejs" };
 
 import crypto from "crypto";
 import { hasHwid, setHwid } from "../../lib/session-store.js";
+import { checkRateLimit } from "../../lib/rate-limiter.js";
 
 function decrypt(encryptedData, iv, authTag, keyHex) {
   const keyBuffer = Buffer.from(keyHex, "hex");
@@ -40,7 +41,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key"
+    "Content-Type, Authorization, X-VW-API-Key, X-Client-Token"
   );
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
@@ -51,6 +52,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     console.log("[HWID-REGISTER] Method not allowed");
     return res.status(405).json({ status: "error", message: "Method not allowed" });
+  }
+
+  const clientToken = (req.headers["x-client-token"] || "").trim();
+  if (!clientToken) {
+    console.log("[HWID-REGISTER] Missing X-Client-Token");
+    return res.status(400).json({ status: "error", message: "Missing X-Client-Token" });
   }
 
   const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
@@ -71,6 +78,12 @@ export default async function handler(req, res) {
   if (!isValid) {
     console.log("[HWID-REGISTER] Invalid API key");
     return res.status(401).json({ status: "error", message: "Invalid API key" });
+  }
+
+  const rateLimit = await checkRateLimit(apiKey, "hwid_register", 3, 300);
+  if (!rateLimit.allowed) {
+    console.log("[HWID-REGISTER] Rate limited");
+    return res.status(429).json({ status: "error", message: "Too many requests" });
   }
 
   const alreadyExists = await hasHwid(apiKey);
