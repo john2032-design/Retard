@@ -4,6 +4,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import {
   getHwid,
+  getPublicKey,
   getSession,
   deleteSession,
   isTokenUsed,
@@ -14,7 +15,6 @@ import {
 import { checkRateLimit } from "../../lib/rate-limiter.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
 const LOOTLINK_BASE_URL = "https://lootlinkcom.vercel.app";
 const HEARTBEAT_WINDOW_MS = 20000;
 
@@ -183,7 +183,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: "error", message: "Invalid attestation" });
   }
   const attestationNonce = parts[0];
-  const attestationHmac = parts[1];
+  const attestationSignature = parts[1];
 
   const nonceValid = await validateAndConsumeNonce(attestationNonce, apiKey);
   if (!nonceValid) {
@@ -191,13 +191,30 @@ export default async function handler(req, res) {
     return res.status(401).json({ status: "error", message: "Invalid or expired nonce" });
   }
 
-  const expectedHmac = crypto
-    .createHmac("sha256", HWID_ENCRYPTION_KEY)
-    .update(attestationNonce)
-    .digest("hex");
+  const publicKeyPem = await getPublicKey(apiKey);
+  if (!publicKeyPem) {
+    console.log("[BYPASS] Public key not found");
+    return res.status(400).json({ status: "error", message: "Public key not registered" });
+  }
 
-  if (attestationHmac !== expectedHmac) {
-    console.log("[BYPASS] Attestation HMAC mismatch");
+  let verified;
+  try {
+    verified = crypto.verify(
+      "sha256",
+      Buffer.from(attestationNonce),
+      {
+        key: publicKeyPem,
+        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+      },
+      Buffer.from(attestationSignature, "base64")
+    );
+  } catch {
+    console.log("[BYPASS] Signature verification error");
+    return res.status(401).json({ status: "error", message: "Signature verification failed" });
+  }
+
+  if (!verified) {
+    console.log("[BYPASS] Attestation signature invalid");
     return res.status(401).json({ status: "error", message: "Attestation failed" });
   }
 
