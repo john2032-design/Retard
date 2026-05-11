@@ -4,9 +4,10 @@ import jwt from "jsonwebtoken";
 import {
   getHwid,
   getSession,
-  markSessionUsed,
+  deleteSession,
   isTokenUsed,
   markTokenUsed,
+  deleteUsedToken,
 } from "../../lib/session-store.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -83,64 +84,94 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST")
-    return res.status(405).json({ status: "error", message: "Method not allowed" });
+  console.log(`[BYPASS] ${req.method} ${req.url}`);
 
-  if (!JWT_SECRET)
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") {
+    console.log("[BYPASS] Method not allowed");
+    return res.status(405).json({ status: "error", message: "Method not allowed" });
+  }
+
+  if (!JWT_SECRET) {
+    console.log("[BYPASS] JWT secret missing");
     return res.status(500).json({ status: "error", message: "Server misconfigured" });
+  }
 
   const auth = verifyAccess(req);
-  if (!auth)
+  if (!auth) {
+    console.log("[BYPASS] Unauthorized – invalid token");
     return res.status(401).json({ status: "error", message: "Unauthorized" });
+  }
 
   const { token, sessionId } = auth;
 
   const alreadyUsed = await isTokenUsed(token);
-  if (alreadyUsed)
+  if (alreadyUsed) {
+    console.log("[BYPASS] Token already used");
     return res.status(401).json({ status: "error", message: "Token already used" });
+  }
 
   const apiKey = (req.headers["x-vw-api-key"] || "").trim();
-  if (!apiKey)
+  if (!apiKey) {
+    console.log("[BYPASS] Missing API key");
     return res.status(400).json({ status: "error", message: "Missing VW API key" });
+  }
 
   const isKeyValid = await validateApiKey(apiKey);
-  if (!isKeyValid)
+  if (!isKeyValid) {
+    console.log("[BYPASS] Invalid API key");
     return res.status(401).json({ status: "error", message: "Invalid API key" });
+  }
 
   const storedHwid = await getHwid(apiKey);
-  if (!storedHwid)
+  if (!storedHwid) {
+    console.log("[BYPASS] HWID not registered");
     return res.status(400).json({ status: "error", message: "HWID not registered" });
+  }
 
   const userAgent = req.headers["user-agent"] || "";
-  if (storedHwid.userAgent !== userAgent)
+  if (storedHwid.userAgent !== userAgent) {
+    console.log("[BYPASS] User-Agent mismatch");
     return res.status(403).json({ status: "error", message: "User-Agent mismatch" });
+  }
 
   const session = await getSession(sessionId);
-  if (!session)
+  if (!session) {
+    console.log("[BYPASS] Session not found");
     return res.status(401).json({ status: "error", message: "Session not found" });
+  }
 
-  if (session.used)
+  if (session.used) {
+    console.log("[BYPASS] Session already used");
     return res.status(401).json({ status: "error", message: "Session already used" });
+  }
 
   const now = Date.now();
-  if (now - session.lastActive > HEARTBEAT_WINDOW_MS)
+  if (now - session.lastActive > HEARTBEAT_WINDOW_MS) {
+    console.log("[BYPASS] Heartbeat expired");
     return res.status(401).json({
       status: "error",
       message: "Heartbeat expired, please heartbeat again",
     });
+  }
 
   const body = parseBody(req);
-  if (!body)
+  if (!body) {
+    console.log("[BYPASS] Invalid JSON body");
     return res.status(400).json({ status: "error", message: "Invalid JSON body" });
+  }
 
   const { url } = body;
-  if (!url || typeof url !== "string")
+  if (!url || typeof url !== "string") {
+    console.log("[BYPASS] Missing url parameter");
     return res.status(400).json({ status: "error", message: "Missing url parameter" });
+  }
 
   const check = validateUrl(url);
-  if (!check.ok)
+  if (!check.ok) {
+    console.log(`[BYPASS] URL validation failed: ${check.error}`);
     return res.status(400).json({ status: "error", message: check.error });
+  }
 
   try {
     const upstream = await fetch(
@@ -148,15 +179,17 @@ export default async function handler(req, res) {
     );
     const text = await upstream.text();
 
-    await markSessionUsed(sessionId, session);
-    await markTokenUsed(token);
+    console.log("[BYPASS] Upstream success, deleting session and token");
+    await deleteSession(sessionId);
+    await deleteUsedToken(token);
 
     res.status(upstream.status);
     res.setHeader("Content-Type", "application/json");
     return res.send(text);
-  } catch {
-    await markSessionUsed(sessionId, session);
-    await markTokenUsed(token);
+  } catch (err) {
+    console.log("[BYPASS] Proxy failed, cleaning up");
+    await deleteSession(sessionId);
+    await deleteUsedToken(token);
 
     return res.status(500).json({ status: "error", message: "Proxy failed" });
   }
