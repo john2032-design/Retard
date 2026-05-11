@@ -4,6 +4,6 @@
   "type": "module",
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
-    "@vercel/kv": "^1.0.0"
+    "ioredis": "^5.6.1"
   }
 }
