@@ -1,13 +1,25 @@
 export const config = { runtime: "nodejs" };
 
 import crypto from "crypto";
-import { hasHwid, setHwid, setPublicKey } from "../../lib/session-store.js";
-import { checkRateLimit } from "../../lib/rate-limiter.js";
+import { hasHwid, setHwid } from "../../lib/session-store.js";
 
-function hashFingerprint(fingerprint, salt) {
+function decrypt(encryptedData, iv, authTag, keyHex) {
+  const keyBuffer = Buffer.from(keyHex, "hex");
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    keyBuffer,
+    Buffer.from(iv, "hex")
+  );
+  decipher.setAuthTag(Buffer.from(authTag, "hex"));
+  let decrypted = decipher.update(encryptedData, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
+function hashHwid(plainHwid, salt) {
   return crypto
     .createHash("sha256")
-    .update(salt + fingerprint)
+    .update(salt + plainHwid)
     .digest("hex");
 }
 
@@ -28,7 +40,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key, X-Client-Token"
+    "Content-Type, Authorization, X-VW-API-Key"
   );
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
@@ -41,15 +53,11 @@ export default async function handler(req, res) {
     return res.status(405).json({ status: "error", message: "Method not allowed" });
   }
 
-  const clientToken = (req.headers["x-client-token"] || "").trim();
-  if (!clientToken) {
-    console.log("[HWID-REGISTER] Missing X-Client-Token");
-    return res.status(400).json({ status: "error", message: "Missing X-Client-Token" });
-  }
-
+  const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
   const HWID_SALT = process.env.HWID_SALT;
-  if (!HWID_SALT) {
-    console.log("[HWID-REGISTER] Missing HWID salt");
+
+  if (!HWID_ENCRYPTION_KEY || !HWID_SALT) {
+    console.log("[HWID-REGISTER] Missing encryption key or salt");
     return res.status(500).json({ status: "error", message: "Server misconfigured" });
   }
 
@@ -65,32 +73,33 @@ export default async function handler(req, res) {
     return res.status(401).json({ status: "error", message: "Invalid API key" });
   }
 
-  const rateLimit = await checkRateLimit(apiKey, "hwid_register", 3, 300);
-  if (!rateLimit.allowed) {
-    console.log("[HWID-REGISTER] Rate limited");
-    return res.status(429).json({ status: "error", message: "Too many requests" });
-  }
-
   const alreadyExists = await hasHwid(apiKey);
   if (alreadyExists) {
     console.log("[HWID-REGISTER] HWID already registered");
     return res.status(409).json({ status: "error", message: "HWID already registered" });
   }
 
-  const { fingerprint, publicKey } = req.body || {};
-  if (!fingerprint || !publicKey) {
-    console.log("[HWID-REGISTER] Missing fingerprint or publicKey");
-    return res.status(400).json({ status: "error", message: "Missing fingerprint or publicKey" });
+  const { encryptedData, iv, authTag } = req.body || {};
+  if (!encryptedData || !iv || !authTag) {
+    console.log("[HWID-REGISTER] Missing encryption fields");
+    return res.status(400).json({ status: "error", message: "Missing encryption fields" });
   }
 
-  const hashed = hashFingerprint(fingerprint, HWID_SALT);
+  let hwid;
+  try {
+    hwid = decrypt(encryptedData, iv, authTag, HWID_ENCRYPTION_KEY);
+  } catch {
+    console.log("[HWID-REGISTER] Decryption failed");
+    return res.status(400).json({ status: "error", message: "Decryption failed" });
+  }
+
+  const hashed = hashHwid(hwid, HWID_SALT);
   const userAgent = req.headers["user-agent"] || "";
   await setHwid(apiKey, {
     hwidHash: hashed,
     userAgent,
     createdAt: Date.now(),
   });
-  await setPublicKey(apiKey, publicKey);
 
   console.log("[HWID-REGISTER] HWID registered successfully");
   return res.status(200).json({ status: "success", message: "HWID registered" });
