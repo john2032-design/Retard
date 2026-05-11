@@ -11,7 +11,7 @@ import {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const BT_API_KEY = process.env.BT_API_KEY;
-const LOOTLINK_BASE_URL = process.env.LOOTLINK_BASE_URL; // e.g. https://lootlinkcom.vercel.app
+const LOOTLINK_BASE_URL = process.env.LOOTLINK_BASE_URL;
 const HEARTBEAT_WINDOW_MS = 20000;
 
 const ALLOWED_TARGET_HOSTS = new Set([
