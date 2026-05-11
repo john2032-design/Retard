@@ -2,7 +2,6 @@ export const config = { runtime: "nodejs" };
 
 import jwt from "jsonwebtoken";
 import { getSession, updateLastActive } from "../../lib/session-store.js";
-import { checkRateLimit } from "../../lib/rate-limiter.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -10,7 +9,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-Client-Token"
+    "Content-Type, Authorization"
   );
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
@@ -21,12 +20,6 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     console.log("[HEARTBEAT] Method not allowed");
     return res.status(405).json({ status: "error", message: "Method not allowed" });
-  }
-
-  const clientToken = (req.headers["x-client-token"] || "").trim();
-  if (!clientToken) {
-    console.log("[HEARTBEAT] Missing X-Client-Token");
-    return res.status(400).json({ status: "error", message: "Missing X-Client-Token" });
   }
 
   const auth = req.headers.authorization || "";
@@ -56,12 +49,6 @@ export default async function handler(req, res) {
   if (session.used) {
     console.log("[HEARTBEAT] Session already used");
     return res.status(401).json({ status: "error", message: "Session already used" });
-  }
-
-  const rateLimit = await checkRateLimit(session.apiKey, "heartbeat", 30, 60);
-  if (!rateLimit.allowed) {
-    console.log("[HEARTBEAT] Rate limited");
-    return res.status(429).json({ status: "error", message: "Too many requests" });
   }
 
   await updateLastActive(decoded.sub, Date.now());
