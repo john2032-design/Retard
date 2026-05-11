@@ -1,0 +1,9 @@
+{
+  "name": "vortix-bypass-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "@vercel/kv": "^1.0.0"
+  }
+}
