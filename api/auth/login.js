@@ -39,28 +39,42 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST")
-    return res.status(405).json({ status: "error", message: "Method not allowed" });
+  console.log(`[LOGIN] ${req.method} ${req.url}`);
 
-  if (!JWT_SECRET || !REFRESH_SECRET)
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") {
+    console.log("[LOGIN] Method not allowed");
+    return res.status(405).json({ status: "error", message: "Method not allowed" });
+  }
+
+  if (!JWT_SECRET || !REFRESH_SECRET) {
+    console.log("[LOGIN] JWT secrets missing");
     return res.status(500).json({ status: "error", message: "Server misconfigured" });
+  }
 
   const apiKey = (req.headers["x-vw-api-key"] || "").trim();
-  if (!apiKey)
+  if (!apiKey) {
+    console.log("[LOGIN] Missing API key");
     return res.status(400).json({ status: "error", message: "Missing API key" });
+  }
 
   const isValid = await validateApiKey(apiKey);
-  if (!isValid)
+  if (!isValid) {
+    console.log("[LOGIN] Invalid API key");
     return res.status(401).json({ status: "error", message: "Invalid API key" });
+  }
 
   const stored = await getHwid(apiKey);
-  if (!stored)
+  if (!stored) {
+    console.log("[LOGIN] HWID not registered");
     return res.status(400).json({ status: "error", message: "HWID not registered" });
+  }
 
   const userAgent = req.headers["user-agent"] || "";
-  if (stored.userAgent !== userAgent)
+  if (stored.userAgent !== userAgent) {
+    console.log("[LOGIN] User-Agent mismatch");
     return res.status(403).json({ status: "error", message: "User-Agent mismatch" });
+  }
 
   const sessionId = randomUUID();
   const accessToken = signAccess(sessionId);
@@ -79,5 +93,6 @@ export default async function handler(req, res) {
     `refresh_token=${refreshToken}; HttpOnly; Path=/api/auth/refresh; Max-Age=1209600; SameSite=None; Secure`,
   ]);
 
+  console.log("[LOGIN] Session created successfully");
   return res.status(200).json({ status: "success", accessToken, expiresIn: "never" });
 }
