@@ -3,14 +3,11 @@ export const config = { runtime: "nodejs" };
 import crypto from "crypto";
 import { hasHwid, setHwid } from "../../lib/session-store.js";
 
-const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
-const HWID_SALT = process.env.HWID_SALT;
-const HWID_KEY_BUFFER = Buffer.from(HWID_ENCRYPTION_KEY, "hex");
-
-function decrypt(encryptedData, iv, authTag) {
+function decrypt(encryptedData, iv, authTag, keyHex) {
+  const keyBuffer = Buffer.from(keyHex, "hex");
   const decipher = crypto.createDecipheriv(
     "aes-256-gcm",
-    HWID_KEY_BUFFER,
+    keyBuffer,
     Buffer.from(iv, "hex")
   );
   decipher.setAuthTag(Buffer.from(authTag, "hex"));
@@ -19,10 +16,10 @@ function decrypt(encryptedData, iv, authTag) {
   return decrypted;
 }
 
-function hashHwid(plainHwid) {
+function hashHwid(plainHwid, salt) {
   return crypto
     .createHash("sha256")
-    .update(HWID_SALT + plainHwid)
+    .update(salt + plainHwid)
     .digest("hex");
 }
 
@@ -52,6 +49,13 @@ export default async function handler(req, res) {
   if (req.method !== "POST")
     return res.status(405).json({ status: "error", message: "Method not allowed" });
 
+  const HWID_ENCRYPTION_KEY = process.env.HWID_ENCRYPTION_KEY;
+  const HWID_SALT = process.env.HWID_SALT;
+
+  if (!HWID_ENCRYPTION_KEY || !HWID_SALT) {
+    return res.status(500).json({ status: "error", message: "Server misconfigured" });
+  }
+
   const apiKey = (req.headers["x-vw-api-key"] || "").trim();
   if (!apiKey)
     return res.status(400).json({ status: "error", message: "Missing API key" });
@@ -70,12 +74,12 @@ export default async function handler(req, res) {
 
   let hwid;
   try {
-    hwid = decrypt(encryptedData, iv, authTag);
+    hwid = decrypt(encryptedData, iv, authTag, HWID_ENCRYPTION_KEY);
   } catch {
     return res.status(400).json({ status: "error", message: "Decryption failed" });
   }
 
-  const hashed = hashHwid(hwid);
+  const hashed = hashHwid(hwid, HWID_SALT);
   const userAgent = req.headers["user-agent"] || "";
   await setHwid(apiKey, {
     hwidHash: hashed,
