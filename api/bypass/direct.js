@@ -10,8 +10,7 @@ import {
 } from "../../lib/session-store.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const BT_API_KEY = process.env.BT_API_KEY;
-const LOOTLINK_BASE_URL = process.env.LOOTLINK_BASE_URL;
+const LOOTLINK_BASE_URL = "https://lootlinkcom.vercel.app";
 const HEARTBEAT_WINDOW_MS = 20000;
 
 const ALLOWED_TARGET_HOSTS = new Set([
@@ -88,7 +87,7 @@ export default async function handler(req, res) {
   if (req.method !== "POST")
     return res.status(405).json({ status: "error", message: "Method not allowed" });
 
-  if (!JWT_SECRET || !BT_API_KEY || !LOOTLINK_BASE_URL)
+  if (!JWT_SECRET)
     return res.status(500).json({ status: "error", message: "Server misconfigured" });
 
   const auth = verifyAccess(req);
