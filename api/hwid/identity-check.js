@@ -3,15 +3,23 @@ export const config = { runtime: "nodejs" };
 import crypto from "crypto";
 import { getHwid } from "../../lib/session-store.js";
 
-const INTERNAL_SECRET = process.env.HWID_RESET_SECRET || "7f3d8a2e4b6c9f1d3a5e7c9b2d4f6a8c0e1d3f5a7b9c1e3d5f7a9b1c3e5d7f9";
+const INTERNAL_SECRET = process.env.HWID_RESET_SECRET || "";
 const HWID_SALT = process.env.HWID_SALT || "";
 
 function hashDeviceFingerprint(fingerprintData, hwidSalt) {
+  if (!fingerprintData || typeof fingerprintData !== "object") return "";
   const normalized = Object.keys(fingerprintData)
     .sort()
     .map(k => `${k}:${(fingerprintData[k] || "").toString().slice(0, 256)}`)
     .join("|");
   return crypto.createHash("sha256").update(hwidSalt + normalized).digest("hex");
+}
+
+function normalizeUserAgent(ua) {
+  return (ua || "")
+    .replace(/Chrome\/[\d.]+|Firefox\/[\d.]+|Edge\/[\d.]+|Edg\/[\d.]+|Version\/[\d.]+|Safari\/[\d.]+|Mobile\/\w+|OPR\/[\d.]+|CriOS\/[\d.]+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export default async function handler(req, res) {
@@ -48,35 +56,30 @@ export default async function handler(req, res) {
     return res.status(200).json({ valid: true, reason: "exact_hwid_match" });
   }
 
-  let matchScore = 0;
-  const totalChecks = 3;
+  const uaMatch = record.userAgent && userAgent
+    ? normalizeUserAgent(record.userAgent) === normalizeUserAgent(userAgent)
+    : false;
 
-  if (record.deviceHash && deviceHash && record.deviceHash === deviceHash) {
-    matchScore++;
-  }
-
+  let fingerprintMatch = false;
   const currentFingerprint = fingerprint || {};
   const storedFingerprint = record.fingerprint || {};
   if (Object.keys(currentFingerprint).length > 0 && Object.keys(storedFingerprint).length > 0) {
     const currentDeviceHash = hashDeviceFingerprint(currentFingerprint, HWID_SALT);
     const storedDeviceHash = hashDeviceFingerprint(storedFingerprint, HWID_SALT);
-    if (currentDeviceHash === storedDeviceHash) {
-      matchScore++;
-    }
+    fingerprintMatch = currentDeviceHash === storedDeviceHash;
   }
 
-  if (record.ip && ip && record.ip === ip) {
-    matchScore++;
+  if (uaMatch || fingerprintMatch) {
+    console.log(`[HWID-IDENTITY-CHECK] Device identity confirmed (UA=${uaMatch}, FP=${fingerprintMatch})`);
+    return res.status(200).json({ valid: true, reason: "identity_match", uaMatch, fingerprintMatch });
   }
 
-  if (matchScore >= 2) {
-    return res.status(200).json({ valid: true, reason: "identity_match", matchScore });
-  }
-
+  console.log(`[HWID-IDENTITY-CHECK] Identity mismatch – rejecting`);
   return res.status(200).json({
     valid: false,
     reason: "device_mismatch",
-    matchScore,
+    uaMatch: false,
+    fingerprintMatch: false,
     message: "Device identity does not match the registered HWID"
   });
 }
