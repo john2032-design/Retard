@@ -13,6 +13,7 @@ import {
 const JWT_SECRET = process.env.JWT_SECRET;
 const LOOTLINK_BASE_URL = "https://lootlinkcom.vercel.app";
 const HEARTBEAT_WINDOW_MS = 20000;
+const API_KEY_SERVICE_URL = "https://apikey-nine.vercel.app/api/key/validate-hwid";
 
 const ALLOWED_TARGET_HOSTS = new Set([
   "linkvertise.com","mboost.me","cuty.io","rekonise.com","ouo.io","work.ink",
@@ -39,9 +40,7 @@ function verifyAccess(req) {
 async function validateApiKey(apiKey) {
   if (!apiKey) return false;
   try {
-    const res = await fetch(
-      `https://apikey-nine.vercel.app/api/key/info/${apiKey}`
-    );
+    const res = await fetch(`https://apikey-nine.vercel.app/api/key/info/${apiKey}`);
     const data = await res.json();
     return data.valid === true;
   } catch {
@@ -77,10 +76,7 @@ function validateUrl(raw) {
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VW-API-Key");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
@@ -130,9 +126,38 @@ export default async function handler(req, res) {
   }
 
   const userAgent = req.headers["user-agent"] || "";
-  if (storedHwid.userAgent !== userAgent) {
-    console.log("[BYPASS] User-Agent mismatch");
-    return res.status(403).json({ status: "error", message: "User-Agent mismatch" });
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "";
+
+  const identityPayload = {
+    key: apiKey,
+    hwidHash: storedHwid.hwidHash,
+    deviceHash: storedHwid.deviceHash || "",
+    userAgent: userAgent,
+    ip: clientIp,
+    fingerprint: storedHwid.fingerprint || {},
+  };
+
+  let identityResult;
+  try {
+    const identityRes = await fetch(API_KEY_SERVICE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(identityPayload),
+    });
+    identityResult = await identityRes.json();
+  } catch (err) {
+    console.log("[BYPASS] Identity validation service unreachable", err);
+    identityResult = { valid: false, reason: "identity_service_unreachable" };
+  }
+
+  if (!identityResult.valid) {
+    console.log("[BYPASS] Identity validation failed", identityResult.reason);
+    return res.status(403).json({
+      status: "error",
+      message: identityResult.reason === "device_mismatch"
+        ? "Device identity mismatch — HWID already registered to a different device"
+        : "Identity validation failed: " + (identityResult.reason || "unknown"),
+    });
   }
 
   const session = await getSession(sessionId);
