@@ -2,7 +2,7 @@ export const config = { runtime: "nodejs" };
 
 import { hasHwid } from "../../lib/session-store.js";
 
-const RESET_SECRET = process.env.HWID_RESET_SECRET || "";
+const RESET_SECRET = process.env.HWID_RESET_SECRET || "7f3d8a2e4b6c9f1d3a5e7c9b2d4f6a8c0e1d3f5a7b9c1e3d5f7a9b1c3e5d7f9";
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
