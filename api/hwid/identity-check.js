@@ -3,7 +3,10 @@ export const config = { runtime: "nodejs" };
 import crypto from "crypto";
 import { getHwid } from "../../lib/session-store.js";
 
-const INTERNAL_SECRET = process.env.HWID_RESET_SECRET || "";
+const HWID_RESET_SECRET = "7f3d8a2e4b6c9f1d3a5e7c9b2d4f6a8c0e1d3f5a7b9c1e3d5f7a9b1c3e5d7f9";
+const BOT_SECRET = "e95eefb03ea57cc5d6810a849c51b4b5fd88b7fbf764a73063d2bcf35b3ad7fc";
+const ALLOWED_SECRETS = [HWID_RESET_SECRET, BOT_SECRET];
+
 const HWID_SALT = process.env.HWID_SALT || "";
 
 function hashDeviceFingerprint(fingerprintData, hwidSalt) {
@@ -37,7 +40,8 @@ export default async function handler(req, res) {
   }
 
   const authHeader = req.headers.authorization || "";
-  if (!authHeader || authHeader !== `Bearer ${INTERNAL_SECRET}`) {
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+  if (!token || !ALLOWED_SECRETS.includes(token)) {
     console.log("[HWID-IDENTITY-CHECK] Unauthorized");
     return res.status(401).json({ status: "error", message: "Unauthorized" });
   }
