@@ -1,15 +1,11 @@
 export const config = { runtime: "nodejs" };
 
 import crypto from "crypto";
-import { hasHwid, setHwid } from "../../lib/session-store.js";
+import { hasHwid, setHwid, getHwid } from "../../lib/session-store.js";
 
 function decrypt(encryptedData, iv, authTag, keyHex) {
   const keyBuffer = Buffer.from(keyHex, "hex");
-  const decipher = crypto.createDecipheriv(
-    "aes-256-gcm",
-    keyBuffer,
-    Buffer.from(iv, "hex")
-  );
+  const decipher = crypto.createDecipheriv("aes-256-gcm", keyBuffer, Buffer.from(iv, "hex"));
   decipher.setAuthTag(Buffer.from(authTag, "hex"));
   let decrypted = decipher.update(encryptedData, "hex", "utf8");
   decrypted += decipher.final("utf8");
@@ -17,18 +13,21 @@ function decrypt(encryptedData, iv, authTag, keyHex) {
 }
 
 function hashHwid(plainHwid, salt) {
-  return crypto
-    .createHash("sha256")
-    .update(salt + plainHwid)
-    .digest("hex");
+  return crypto.createHash("sha256").update(salt + plainHwid).digest("hex");
+}
+
+function hashDeviceFingerprint(fingerprintData, hwidSalt) {
+  const normalized = Object.keys(fingerprintData)
+    .sort()
+    .map(k => `${k}:${(fingerprintData[k] || "").toString().slice(0, 256)}`)
+    .join("|");
+  return crypto.createHash("sha256").update(hwidSalt + normalized).digest("hex");
 }
 
 async function validateApiKey(apiKey) {
   if (!apiKey) return false;
   try {
-    const res = await fetch(
-      `https://apikey-nine.vercel.app/api/key/info/${apiKey}`
-    );
+    const res = await fetch(`https://apikey-nine.vercel.app/api/key/info/${apiKey}`);
     const data = await res.json();
     return data.valid === true;
   } catch {
@@ -38,10 +37,7 @@ async function validateApiKey(apiKey) {
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VW-API-Key");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
@@ -73,13 +69,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ status: "error", message: "Invalid API key" });
   }
 
-  const alreadyExists = await hasHwid(apiKey);
-  if (alreadyExists) {
-    console.log("[HWID-REGISTER] HWID already registered");
-    return res.status(409).json({ status: "error", message: "HWID already registered" });
-  }
-
-  const { encryptedData, iv, authTag } = req.body || {};
+  const { encryptedData, iv, authTag, fingerprint } = req.body || {};
   if (!encryptedData || !iv || !authTag) {
     console.log("[HWID-REGISTER] Missing encryption fields");
     return res.status(400).json({ status: "error", message: "Missing encryption fields" });
@@ -93,14 +83,40 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: "error", message: "Decryption failed" });
   }
 
-  const hashed = hashHwid(hwid, HWID_SALT);
+  const hashedHwid = hashHwid(hwid, HWID_SALT);
   const userAgent = req.headers["user-agent"] || "";
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "";
+
+  const deviceHash = fingerprint ? hashDeviceFingerprint(fingerprint, HWID_SALT) : "";
+
+  const alreadyExists = await hasHwid(apiKey);
+  if (alreadyExists) {
+    const existing = await getHwid(apiKey);
+    if (existing && existing.hwidHash === hashedHwid) {
+      await setHwid(apiKey, {
+        hwidHash: hashedHwid,
+        deviceHash: deviceHash || existing.deviceHash,
+        userAgent,
+        ip: clientIp,
+        fingerprint: fingerprint || existing.fingerprint,
+        createdAt: existing.createdAt,
+        renewedAt: Date.now(),
+      });
+      console.log("[HWID-REGISTER] HWID renewed (same device)");
+      return res.status(200).json({ status: "success", message: "HWID renewed" });
+    }
+    console.log("[HWID-REGISTER] HWID already registered (different device)");
+    return res.status(409).json({ status: "error", message: "HWID already registered for this API key" });
+  }
+
   await setHwid(apiKey, {
-    hwidHash: hashed,
+    hwidHash: hashedHwid,
+    deviceHash,
     userAgent,
+    ip: clientIp,
+    fingerprint: fingerprint || {},
     createdAt: Date.now(),
   });
-
   console.log("[HWID-REGISTER] HWID registered successfully");
   return res.status(200).json({ status: "success", message: "HWID registered" });
 }
