@@ -20,9 +20,7 @@ function signRefresh(sessionId) {
 async function validateApiKey(apiKey) {
   if (!apiKey) return false;
   try {
-    const res = await fetch(
-      `https://apikey-nine.vercel.app/api/key/info/${apiKey}`
-    );
+    const res = await fetch(`https://apikey-nine.vercel.app/api/key/info/${apiKey}`);
     const data = await res.json();
     return data.valid === true;
   } catch {
@@ -32,10 +30,7 @@ async function validateApiKey(apiKey) {
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-VW-API-Key"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-VW-API-Key");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Cache-Control", "no-store");
 
